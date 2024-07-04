@@ -54,6 +54,7 @@ import android.os.Bundle;
 import android.os.CancellationSignal;
 import android.os.Environment;
 import android.os.UserHandle;
+import android.os.UserManager;
 import android.provider.MediaStore;
 import android.provider.MediaStore.Audio.AudioColumns;
 import android.provider.MediaStore.Files.FileColumns;
@@ -77,6 +78,7 @@ import com.android.providers.media.photopicker.data.ItemsProvider;
 import com.android.providers.media.util.FileUtils;
 import com.android.providers.media.util.FileUtilsTest;
 import com.android.providers.media.util.SQLiteQueryBuilder;
+import com.android.providers.media.util.UserCache;
 
 import org.junit.AfterClass;
 import org.junit.Assert;
@@ -500,11 +502,36 @@ public class MediaProviderTest {
     }
 
     @Test
+    public void testInsertionWithFilePathOnAnotherUserVolume_throwsIllegalArgumentException() {
+        final UserCache userCache = new UserCache(sContext);
+        UserHandle otherUserHandle = sContext.getSystemService(UserManager.class)
+                .getUserHandles(true).stream()
+                .filter(uH -> !userCache.getUsersCached().contains(uH))
+                .findFirst()
+                .orElse(null);
+        Assume.assumeNotNull(otherUserHandle);
+
+        final ContentValues values = new ContentValues();
+        values.put(MediaStore.MediaColumns.RELATIVE_PATH, "Download");
+        final String filePath = "/storage/emulated/"
+                + otherUserHandle.getIdentifier() + "/Pictures/test.jpg";
+        values.put(MediaStore.Images.Media.DISPLAY_NAME,
+                "./../../../../../../../../../../../" + filePath);
+
+        IllegalArgumentException illegalArgumentException = Assert.assertThrows(
+                IllegalArgumentException.class, () -> sIsolatedResolver.insert(
+                        MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
+                        values));
+
+        assertThat(illegalArgumentException).hasMessageThat().contains(
+                "Requested path " + filePath + " doesn't appear");
+    }
+
+    @Test
     public void testInsertionWithInvalidFilePath_throwsIllegalArgumentException() {
         final ContentValues values = new ContentValues();
-        values.put(MediaStore.MediaColumns.RELATIVE_PATH, "Android/media/com.example");
-        values.put(MediaStore.Images.Media.DISPLAY_NAME,
-                "./../../../../../../../../../../../data/media/test.txt");
+        values.put(MediaStore.MediaColumns.RELATIVE_PATH, "Android/media/com.example/");
+        values.put(MediaStore.Images.Media.DISPLAY_NAME, "data/media/test.txt");
 
         IllegalArgumentException illegalArgumentException = Assert.assertThrows(
                 IllegalArgumentException.class, () -> sIsolatedResolver.insert(
@@ -567,6 +594,21 @@ public class MediaProviderTest {
     public void testCustomCollator() throws Exception {
         final Bundle extras = new Bundle();
         extras.putString(ContentResolver.QUERY_ARG_SORT_LOCALE, "en");
+
+        try (Cursor c = sIsolatedResolver.query(MediaStore.Files.EXTERNAL_CONTENT_URI,
+                null, extras, null)) {
+            assertNotNull(c);
+        }
+    }
+
+    /**
+     * This is only for coverage purposes. All logical tests will be included in the
+     * root/cts/hostsidetests/scopedStorage directory.
+     */
+    @Test
+    public void testRecentSelectionOnly() {
+        final Bundle extras = new Bundle();
+        extras.putBoolean(MediaStore.QUERY_ARG_LATEST_SELECTION_ONLY, true);
 
         try (Cursor c = sIsolatedResolver.query(MediaStore.Files.EXTERNAL_CONTENT_URI,
                 null, extras, null)) {
@@ -1643,7 +1685,7 @@ public class MediaProviderTest {
     }
 
     private static boolean isGreylistMatch(String raw) {
-        for (Pattern p : MediaProvider.sGreylist) {
+        for (Pattern p : MediaProvider.sAllowlist) {
             if (p.matcher(raw).matches()) {
                 return true;
             }
